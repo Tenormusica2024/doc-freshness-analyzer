@@ -57,16 +57,23 @@ catch {
     $reality = @{ fileStructure = @(); errors = @($_) }
 }
 
-# Phase 3: Collect Source Code (for deep verification)
-Write-Host "[3/4] Collecting source code for deep verification..." -ForegroundColor Yellow
+# Phase 3: Collect ALL Source Code (comprehensive analysis)
+Write-Host "[3/4] Collecting ALL source files for comprehensive analysis..." -ForegroundColor Yellow
 $sourceData = $null
 try {
     $sourceScript = Join-Path $ScriptDir "collect-source.ps1"
     if (Test-Path $sourceScript) {
-        $sourceJson = & $sourceScript -Target $Target -Owner $Owner -Branch $Branch -MaxFiles $MaxSourceFiles
+        $sourceJson = & $sourceScript -Target $Target -Owner $Owner -Branch $Branch
         $sourceData = $sourceJson | Out-String | ConvertFrom-Json
-        Write-Host "  Found $($sourceData.summary.totalSourceFiles) source files" -ForegroundColor Green
-        Write-Host "  Extracted $($sourceData.summary.totalExports) exports, $($sourceData.summary.totalRoutes) routes" -ForegroundColor Green
+        Write-Host "  Total files in repo: $($sourceData.summary.totalFilesInRepo)" -ForegroundColor Green
+        Write-Host "  Source files fetched: $($sourceData.summary.totalSourceFiles) ($($sourceData.summary.totalLines) lines)" -ForegroundColor Green
+        Write-Host "  Exports: $($sourceData.summary.totalExports) | Imports: $($sourceData.summary.totalImports) | Routes: $($sourceData.summary.totalRoutes)" -ForegroundColor Green
+        if ($sourceData.summary.legacyFileCount -gt 0) {
+            Write-Host "  Legacy/backup files detected: $($sourceData.summary.legacyFileCount)" -ForegroundColor Yellow
+        }
+        if ($sourceData.summary.potentiallyUnusedCount -gt 0) {
+            Write-Host "  Potentially unused files: $($sourceData.summary.potentiallyUnusedCount)" -ForegroundColor Yellow
+        }
     }
     else {
         Write-Host "  Source collection script not found, skipping..." -ForegroundColor Yellow
@@ -74,7 +81,7 @@ try {
 }
 catch {
     Write-Host "  Error collecting source: $_" -ForegroundColor Red
-    $sourceData = @{ sourceFiles = @(); exports = @(); routes = @(); errors = @($_) }
+    $sourceData = @{ sourceFiles = @(); exports = @(); routes = @(); imports = @(); legacyFiles = @(); potentiallyUnused = @(); errors = @($_) }
 }
 
 # Phase 4: Prepare analysis data
@@ -164,17 +171,38 @@ if ($sourceData -and $sourceData.sourceFiles.Count -gt 0) {
 
 ## PART 3: Source Code Analysis
 
-### 3.1 Exported Functions/Classes ($($sourceData.summary.totalExports) exports)
+### 3.1 File Categories Summary
+``````json
+$($sourceData.summary.categorySummary | ConvertTo-Json -Depth 3)
+``````
+
+### 3.2 Exported Functions/Classes ($($sourceData.summary.totalExports) exports)
 ``````json
 $($sourceData.exports | ConvertTo-Json -Depth 3)
 ``````
 
-### 3.2 API Routes ($($sourceData.summary.totalRoutes) routes)
+### 3.3 Import Graph ($($sourceData.summary.totalImports) imports)
+``````json
+$($sourceData.imports | ConvertTo-Json -Depth 3)
+``````
+
+### 3.4 API Routes ($($sourceData.summary.totalRoutes) routes)
 ``````json
 $($sourceData.routes | ConvertTo-Json -Depth 3)
 ``````
 
-### 3.3 Key Source Files ($($sourceData.summary.totalSourceFiles) files)
+### 3.5 Legacy/Backup Files Detected ($($sourceData.summary.legacyFileCount) files)
+``````json
+$($sourceData.legacyFiles | ConvertTo-Json -Depth 3)
+``````
+
+### 3.6 Potentially Unused Files ($($sourceData.summary.potentiallyUnusedCount) files)
+These files have exports but are not imported anywhere, or have no exports at all:
+``````json
+$($sourceData.potentiallyUnused | ConvertTo-Json -Depth 3)
+``````
+
+### 3.7 All Source Files ($($sourceData.summary.totalSourceFiles) files, $($sourceData.summary.totalLines) lines)
 
 "@
 
@@ -233,14 +261,24 @@ For EACH extracted claim:
 - Dev vs production dependency confusion?
 
 **Code Example Verification:**
-- Do import paths resolve?
-- Do function signatures match actual exports?
+- Do import paths resolve? (Check against Import Graph)
+- Do function signatures match actual exports? (Check against Exports list)
 - Are shown parameters correct?
 
 **API/Route Verification:**
-- Do documented endpoints match actual routes?
+- Do documented endpoints match actual routes? (Check against Routes list)
 - HTTP methods correct?
 - Response formats accurate?
+
+**Unused/Legacy File Detection:**
+- Review the "Potentially Unused Files" list - should these be removed?
+- Review the "Legacy/Backup Files" list - should these be cleaned up?
+- Are any unused files mentioned in documentation but no longer needed?
+
+**Import/Export Consistency:**
+- Are there exports that nothing imports? (dead code)
+- Are there imports that reference non-existent files?
+- Circular dependency detection
 
 ### Phase C: Semantic Analysis (1-2 minutes)
 - Contradiction detection (docs say X in one place, Y in another)
