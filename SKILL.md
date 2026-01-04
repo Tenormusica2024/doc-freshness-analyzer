@@ -2,7 +2,11 @@
 name: doc-freshness-analyzer
 description: |
   GitHub リポジトリのドキュメント（README.md, docs/）とコードの実態を深層比較し、
-  古い記述・不一致・誤情報を細部まで検出するスキル。
+  古い記述・不一致・誤情報を**99%以上の精度**で検出するスキル。
+  
+  **検出精度目標**: 99%+ (False Negative = ツール失敗)
+  **検出原則**: 疑わしきは報告（False Positiveは許容、False Negativeは禁止）
+  
   Use this skill when: 「ドキュメントが最新化されてるかチェック」「READMEの内容が正しいか確認」
   「ドキュメントとコードの整合性チェック」「古い記述がないか検証」と依頼された時。
   NOTE: リポジトリ単位で実行。全体チェックには時間がかかるため、対象リポジトリを指定して実行する。
@@ -11,14 +15,21 @@ allowed-tools: Bash, Read, Write, Glob, Grep, Task
 
 # Document Freshness Analyzer
 
-## Purpose
+## Purpose & Quality Target
 
-GitHub リポジトリのドキュメントを**細部まで精査**し、以下を検出する:
-- コードの実態と一致しない記述
-- 存在しないファイルパス・関数への参照
-- 古いバージョン番号・依存関係
-- 廃止されたコマンド・API
-- 誤った設定例・実行手順
+GitHub リポジトリのドキュメントを**99%以上の精度**で検証する。
+
+**検出目標:**
+- コードの実態と一致しない記述 → **100%検出**
+- 存在しないファイルパス・関数への参照 → **100%検出**
+- 古いバージョン番号・依存関係 → **99%検出**
+- 廃止されたコマンド・API → **99%検出**
+- 誤った設定例・実行手順 → **99%検出**
+
+**品質原則:**
+- **False Negative = ツール失敗** (見逃しは許されない)
+- **False Positive = 許容** (疑わしきは報告)
+- **検証不能 = Warning報告** (確認できない = 潜在的問題)
 
 ## Execution Model
 
@@ -154,18 +165,45 @@ User: C:\Users\Tenormusica\projects\my-app のREADMEが正しいか確認
 User: https://github.com/tenormusica2024/neon-charts のドキュメント検証
 ```
 
-## Detection Categories
+## Detection Categories (25カテゴリ)
 
-| Category | Severity | Example |
-|----------|----------|---------|
-| FILE_NOT_FOUND | Critical | 参照ファイルが存在しない |
-| COMMAND_INVALID | Critical | 実行できないコマンド |
-| API_CHANGED | Critical | 関数名・引数が変更されている |
-| VERSION_MISMATCH | Warning | バージョン番号が古い |
-| DEPENDENCY_REMOVED | Warning | 使われていない依存関係への言及 |
-| CONFIG_CHANGED | Warning | 設定項目名が変更されている |
-| DESCRIPTION_OUTDATED | Info | 説明文が実態と乖離 |
-| LINK_BROKEN | Info | 外部リンクが切れている |
+### Critical (P0/P1) - 即時修正必須
+| Category | Description | Detection Priority |
+|----------|-------------|-------------------|
+| FILE_NOT_FOUND | 参照ファイルが存在しない | 100% |
+| FILE_MOVED | ファイルが移動されている | 100% |
+| EXTENSION_MISMATCH | 拡張子が異なる (.js vs .ts) | 100% |
+| CASE_MISMATCH | 大文字小文字の不一致 | 100% |
+| COMMAND_INVALID | 実行できないコマンド | 100% |
+| SCRIPT_MISSING | npm scriptsに存在しない | 100% |
+| PACKAGE_MANAGER_WRONG | npm/bun/yarn/pnpmの不一致 | 100% |
+| DEPENDENCY_MISSING | 記載依存関係が未インストール | 100% |
+| FUNCTION_RENAMED | 関数名が変更されている | 99% |
+| FUNCTION_SIGNATURE_CHANGED | 関数の引数・戻り値が変更 | 99% |
+| IMPORT_PATH_WRONG | importパスが解決不能 | 99% |
+| EXPORT_MISSING | exportが存在しない | 99% |
+| EXAMPLE_WONT_RUN | コード例が動作しない | 99% |
+| SECURITY_RISK | セキュリティ設定の誤り | 100% |
+
+### Warning (P2) - 要レビュー
+| Category | Description | Detection Priority |
+|----------|-------------|-------------------|
+| VERSION_MISMATCH | バージョン番号が古い | 99% |
+| DEPENDENCY_UNUSED | 記載依存関係が使われていない | 95% |
+| ENV_VAR_MISSING | 環境変数が.env.exampleにない | 99% |
+| ENV_VAR_RENAMED | 環境変数名が変更されている | 99% |
+| API_CHANGED | APIエンドポイントが変更 | 99% |
+| ENDPOINT_MISSING | エンドポイントが存在しない | 99% |
+| CONFIG_KEY_RENAMED | 設定キー名が変更 | 95% |
+| CONTRADICTION | ドキュメント内で矛盾 | 95% |
+| INCOMPLETE | 必須情報が欠落 | 90% |
+| UNVERIFIABLE | 検証不能（潜在的問題） | 100% |
+
+### Info (P3) - 軽微
+| Category | Description | Detection Priority |
+|----------|-------------|-------------------|
+| DESCRIPTION_OUTDATED | 説明文が実態と乖離 | 85% |
+| DEAD_LINK | 外部リンク切れ | 80% |
 
 ## Integration
 
@@ -181,5 +219,34 @@ User: https://github.com/tenormusica2024/neon-charts のドキュメント検証
 
 - `scripts/collect-docs.ps1` - ドキュメント収集
 - `scripts/collect-reality.ps1` - コード実態収集
-- `scripts/analyze-prompt.md` - Claude解析プロンプト
+- `scripts/collect-source.ps1` - ソースコード全量収集（export/import/route解析）
+- `scripts/analyze-prompt.md` - Claude解析プロンプト（99%精度設計）
 - `scripts/run-analysis.ps1` - 統合実行スクリプト
+
+## Quality Assurance Checklist
+
+分析完了時、以下を確認すること:
+
+```
+□ クレーム抽出数: 20件以上/ドキュメント
+□ 検証カバレッジ: 95%以上
+□ ファイルパス: 全件検証済み
+□ コマンド: 全件検証済み
+□ 依存関係: 全件検証済み
+□ 関数/クラス: exports listと照合済み
+□ 検証不能項目: Warning報告済み
+□ 修正提案: コピペ可能な形式
+```
+
+**チェックリスト未完了 = 分析失敗**
+
+## False Negative Prevention Protocol
+
+**絶対原則: 疑わしきは報告**
+
+1. **検証できない** → Warning「UNVERIFIABLE」として報告
+2. **部分一致** → Mismatchとして報告（完全一致でなければ問題）
+3. **類似ファイル発見** → FILE_MOVED候補として報告
+4. **確信が持てない** → 低confidence で報告
+
+**見逃し(False Negative)はツールの存在意義を否定する失敗である**
