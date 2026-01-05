@@ -91,15 +91,19 @@
 
 **Expected Impact**: ドキュメントのdriftを未然に防止、メンテナンスコスト大幅削減
 
-#### 4.2 Multi-Platform Support
+#### 4.2 Multi-Platform Support (Low Priority)
 - [ ] Node.js版（npm package）
 - [ ] Python版（pip package）
 - [ ] Docker image
 
-#### 4.3 AI-Powered Suggestions
-- [ ] 修正内容の自動生成（Claude API連携強化）
+**Note**: Claude Code CLI前提のため、優先度は低い
+
+#### 4.3 AI-Powered Suggestions (On Hold)
+- [ ] 修正内容の自動生成
 - [ ] ドキュメント品質スコアの詳細分析
 - [ ] 類似パターン検出による一括修正提案
+
+**Note**: Claude API（従量課金）は使用せず、Claude Code CLI（サブスク）前提で設計。需要が出るまでAPI連携は保留
 
 ---
 

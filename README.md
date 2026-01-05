@@ -142,7 +142,24 @@ jobs:
 
 - PowerShell 7+
 - GitHub CLI (`gh`) authenticated
-- Claude API (for analysis phase)
+- Claude Code CLI (for analysis phase)
+
+## Design Philosophy
+
+This tool is designed for **personal use with Claude Code CLI** (subscription-based), not Claude API (pay-per-use).
+
+**Why no API integration?**
+- Zero additional cost for Claude Pro/Max subscribers
+- No API key management required
+- Interactive analysis with human oversight
+- Cost-effective for individual developers
+
+**Trade-offs:**
+- Requires local PC to be running
+- Cannot run fully automated in CI/CD (data collection only)
+- Manual trigger required for analysis phase
+
+If significant demand emerges, API integration may be considered in future versions.
 
 ## License
 
