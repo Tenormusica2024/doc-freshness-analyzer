@@ -14,7 +14,12 @@ param(
     [string]$OutputDir = "",
     [switch]$JsonOnly,
     [switch]$IncludeSource,
-    [int]$MaxSourceFiles = 15
+    [switch]$Incremental,
+    [switch]$VerifyUrls,
+    [switch]$InvalidateCache,
+    [switch]$DeepMode,
+    [int]$MaxSourceFiles = 15,
+    [int]$RecentDays = 30
 )
 
 # Set defaults if not provided
@@ -26,6 +31,55 @@ $startTime = Get-Date
 
 # Clear GITHUB_TOKEN to use gh auth
 Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+
+# Handle cache invalidation
+if ($InvalidateCache) {
+    $cacheScript = Join-Path $ScriptDir "cache-manager.ps1"
+    & $cacheScript -Action invalidate -Target $Target -Owner $Owner
+    Write-Host "Cache invalidated for $Target" -ForegroundColor Yellow
+    if (-not $Incremental -and -not $JsonOnly) {
+        return
+    }
+}
+
+# Incremental mode: check for changed files
+$incrementalData = $null
+$changedFiles = @()
+$isIncremental = $false
+
+if ($Incremental) {
+    $cacheScript = Join-Path $ScriptDir "cache-manager.ps1"
+    if (Test-Path $cacheScript) {
+        Write-Host "[INCREMENTAL] Checking for changes since last analysis..." -ForegroundColor Cyan
+        $diffResult = & $cacheScript -Action diff -Target $Target -Owner $Owner -Branch $Branch | Out-String | ConvertFrom-Json
+        
+        if ($diffResult.success -and $diffResult.noChanges) {
+            Write-Host "[INCREMENTAL] No changes detected. Using cached results." -ForegroundColor Green
+            $cacheResult = & $cacheScript -Action load -Target $Target -Owner $Owner | Out-String | ConvertFrom-Json
+            if ($cacheResult.exists -and $cacheResult.cache.data) {
+                if ($JsonOnly) {
+                    $cacheResult.cache.data | ConvertTo-Json -Depth 10
+                } else {
+                    Write-Host "Cached analysis from: $($cacheResult.cache.timestamp)" -ForegroundColor Gray
+                    Write-Host $cacheResult.cache.data.context
+                }
+                return $cacheResult.cache.data
+            }
+        } elseif ($diffResult.success) {
+            $changedFiles = $diffResult.changedFiles
+            $isIncremental = $true
+            Write-Host "[INCREMENTAL] $($changedFiles.Count) file(s) changed since last analysis" -ForegroundColor Yellow
+            foreach ($f in $changedFiles | Select-Object -First 10) {
+                Write-Host "  - $f" -ForegroundColor Gray
+            }
+            if ($changedFiles.Count -gt 10) {
+                Write-Host "  ... and $($changedFiles.Count - 10) more" -ForegroundColor Gray
+            }
+        } else {
+            Write-Host "[INCREMENTAL] $($diffResult.reason) - Running full analysis" -ForegroundColor Yellow
+        }
+    }
+}
 
 Write-Host "=== Document Freshness Analyzer (Deep Analysis) ===" -ForegroundColor Cyan
 Write-Host "Target: $Target" -ForegroundColor Gray
@@ -57,22 +111,37 @@ catch {
     $reality = @{ fileStructure = @(); errors = @($_) }
 }
 
-# Phase 3: Collect ALL Source Code (comprehensive analysis)
-Write-Host "[3/4] Collecting ALL source files for comprehensive analysis..." -ForegroundColor Yellow
+# Phase 3: Collect Source Code (smart mode by default, deep mode optional)
+$modeLabel = if ($DeepMode) { "ALL source files (DeepMode)" } else { "active source files (SmartMode)" }
+Write-Host "[3/4] Collecting $modeLabel..." -ForegroundColor Yellow
 $sourceData = $null
 try {
     $sourceScript = Join-Path $ScriptDir "collect-source.ps1"
     if (Test-Path $sourceScript) {
-        $sourceJson = & $sourceScript -Target $Target -Owner $Owner -Branch $Branch
+        $sourceArgs = @{
+            Target = $Target
+            Owner = $Owner
+            Branch = $Branch
+            RecentDays = $RecentDays
+        }
+        if ($DeepMode) { $sourceArgs.DeepMode = $true }
+        if ($reality) { $sourceArgs.RealityData = $reality }
+        
+        $sourceJson = & $sourceScript @sourceArgs
         $sourceData = $sourceJson | Out-String | ConvertFrom-Json
+        
         Write-Host "  Total files in repo: $($sourceData.summary.totalFilesInRepo)" -ForegroundColor Green
-        Write-Host "  Source files fetched: $($sourceData.summary.totalSourceFiles) ($($sourceData.summary.totalLines) lines)" -ForegroundColor Green
+        Write-Host "  Mode: $($sourceData.summary.mode) | Active: $($sourceData.summary.activeFileCount) | Inactive: $($sourceData.summary.inactiveFileCount)" -ForegroundColor Cyan
+        Write-Host "  Source files with content: $($sourceData.summary.totalSourceFiles) ($($sourceData.summary.totalLines) lines)" -ForegroundColor Green
         Write-Host "  Exports: $($sourceData.summary.totalExports) | Imports: $($sourceData.summary.totalImports) | Routes: $($sourceData.summary.totalRoutes)" -ForegroundColor Green
         if ($sourceData.summary.legacyFileCount -gt 0) {
             Write-Host "  Legacy/backup files detected: $($sourceData.summary.legacyFileCount)" -ForegroundColor Yellow
         }
         if ($sourceData.summary.potentiallyUnusedCount -gt 0) {
             Write-Host "  Potentially unused files: $($sourceData.summary.potentiallyUnusedCount)" -ForegroundColor Yellow
+        }
+        if ($sourceData.inactiveFiles -and $sourceData.inactiveFiles.Count -gt 0) {
+            Write-Host "  Inactive files (content skipped): $($sourceData.inactiveFiles.Count)" -ForegroundColor Gray
         }
     }
     else {
@@ -191,18 +260,23 @@ $($sourceData.imports | ConvertTo-Json -Depth 3)
 $($sourceData.routes | ConvertTo-Json -Depth 3)
 ``````
 
-### 3.5 Legacy/Backup Files Detected ($($sourceData.summary.legacyFileCount) files)
+### 3.5 External URLs ($($sourceData.summary.totalExternalUrls) URLs)
+``````json
+$($sourceData.externalUrls | ConvertTo-Json -Depth 3)
+``````
+
+### 3.6 Legacy/Backup Files Detected ($($sourceData.summary.legacyFileCount) files)
 ``````json
 $($sourceData.legacyFiles | ConvertTo-Json -Depth 3)
 ``````
 
-### 3.6 Potentially Unused Files ($($sourceData.summary.potentiallyUnusedCount) files)
+### 3.7 Potentially Unused Files ($($sourceData.summary.potentiallyUnusedCount) files)
 These files have exports but are not imported anywhere, or have no exports at all:
 ``````json
 $($sourceData.potentiallyUnused | ConvertTo-Json -Depth 3)
 ``````
 
-### 3.7 All Source Files ($($sourceData.summary.totalSourceFiles) files, $($sourceData.summary.totalLines) lines)
+### 3.8 All Source Files ($($sourceData.summary.totalSourceFiles) files, $($sourceData.summary.totalLines) lines)
 
 "@
 
@@ -210,7 +284,7 @@ $($sourceData.potentiallyUnused | ConvertTo-Json -Depth 3)
         $analysisContext += @"
 
 #### $($src.path)
-**Priority Score**: $($src.priority) | **Lines**: $($src.lines)
+**Category**: $($src.category) | **Lines**: $($src.lines) | **Size**: $($src.size) bytes
 
 ``````javascript
 $($src.content)
@@ -381,16 +455,54 @@ else {
     Write-Host $analysisContext
 }
 
+# URL Verification (optional)
+$urlVerificationResults = $null
+if ($VerifyUrls -and $sourceData -and $sourceData.externalUrls.Count -gt 0) {
+    Write-Host ""
+    Write-Host "[URL CHECK] Verifying $($sourceData.externalUrls.Count) external URLs..." -ForegroundColor Yellow
+    $verifyScript = Join-Path $ScriptDir "verify-urls.ps1"
+    if (Test-Path $verifyScript) {
+        $urlVerificationResults = & $verifyScript -UrlData $sourceData.externalUrls -TimeoutSeconds 10 -DelayMs 500 | Out-String | ConvertFrom-Json
+        if ($urlVerificationResults.deadLinks.Count -gt 0) {
+            Write-Host "[URL CHECK] Found $($urlVerificationResults.deadLinks.Count) dead link(s)!" -ForegroundColor Red
+        }
+    }
+}
+
 Write-Host ""
 Write-Host "Data Collection Completed: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Gray
 Write-Host "Duration: $([math]::Round($duration, 1)) seconds" -ForegroundColor Gray
+if ($isIncremental) {
+    Write-Host "Mode: Incremental ($($changedFiles.Count) changed files)" -ForegroundColor Cyan
+}
 Write-Host ""
 Write-Host "NOTE: The actual analysis by Claude should take 5-10 minutes for thorough verification." -ForegroundColor Yellow
 
-return @{
+$resultData = @{
     context = $analysisContext
     documents = $docs
     reality = $reality
     sourceCode = $sourceData
+    urlVerification = $urlVerificationResults
     collectionDuration = $duration
+    incremental = $isIncremental
+    changedFiles = $changedFiles
 }
+
+# Save to cache for incremental mode
+if (-not $JsonOnly) {
+    $cacheScript = Join-Path $ScriptDir "cache-manager.ps1"
+    if (Test-Path $cacheScript) {
+        $saveResult = & $cacheScript -Action save -Target $Target -Owner $Owner -Branch $Branch -Data $resultData | Out-String | ConvertFrom-Json
+        if ($saveResult.success) {
+            $shortHash = if ($saveResult.commitHash -and $saveResult.commitHash.Length -ge 7) { 
+                $saveResult.commitHash.Substring(0, 7) 
+            } else { 
+                "(no commit)" 
+            }
+            Write-Host "Results cached at commit: $shortHash" -ForegroundColor Gray
+        }
+    }
+}
+
+return $resultData

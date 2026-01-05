@@ -1,5 +1,6 @@
-# Collect ALL source code for comprehensive verification
-# Fetches all source files + detects potentially unused/orphan files
+# Collect source code with importance scoring
+# Fetches ALL source files but only includes content for "active" files
+# Active = referenced in package.json scripts, imported, or recently modified
 
 param(
     [Parameter(Mandatory=$true)]
@@ -8,20 +9,39 @@ param(
     [string]$Owner = "tenormusica2024",
     [string]$Branch = "main",
     [int]$MaxFileSize = 100000,
-    [switch]$SkipContent
+    [switch]$SkipContent,
+    [switch]$DeepMode,
+    [int]$RecentDays = 30,
+    [object]$RealityData
 )
 
+# Importance score constants (P1: マジックナンバー定数化)
+$SCORE_ENTRY_POINT = 50
+$SCORE_SCRIPT_REF_FULL = 40
+$SCORE_SCRIPT_REF_BASENAME = 30
+$SCORE_IMPORT_PER_FILE = 30
+$SCORE_IMPORT_MAX = 60
+$SCORE_WORKFLOW_REF = 35
+$SCORE_RECENT_MODIFIED = 20
+$SCORE_CONFIG_FILE = 25
+$SCORE_API_ROUTE = 30
+$SCORE_ACTIVE_THRESHOLD = 30
+
+# Use ArrayList for better performance (P2: 配列操作効率化)
 $results = @{
     source = ""
     type = ""
-    sourceFiles = @()
-    allFiles = @()
-    exports = @()
-    routes = @()
-    imports = @()
-    potentiallyUnused = @()
-    legacyFiles = @()
-    errors = @()
+    sourceFiles = [System.Collections.ArrayList]::new()
+    allFiles = [System.Collections.ArrayList]::new()
+    exports = [System.Collections.ArrayList]::new()
+    routes = [System.Collections.ArrayList]::new()
+    imports = [System.Collections.ArrayList]::new()
+    externalUrls = [System.Collections.ArrayList]::new()
+    potentiallyUnused = [System.Collections.ArrayList]::new()
+    legacyFiles = [System.Collections.ArrayList]::new()
+    activeFiles = [System.Collections.ArrayList]::new()
+    inactiveFiles = [System.Collections.ArrayList]::new()
+    errors = [System.Collections.ArrayList]::new()
 }
 
 # Files to completely skip (not even list)
@@ -94,6 +114,21 @@ $configPatterns = @(
     "\.cmd$"
 )
 
+# Entry point patterns (always active)
+$entryPointPatterns = @(
+    "^index\.(js|ts|jsx|tsx|py|go|rs)$"
+    "^main\.(js|ts|jsx|tsx|py|go|rs)$"
+    "^app\.(js|ts|jsx|tsx|py)$"
+    "^server\.(js|ts|py)$"
+    "^src/index\."
+    "^src/main\."
+    "^src/app\."
+    "^pages/_app\."
+    "^pages/_document\."
+    "^app/layout\."
+    "^app/page\."
+)
+
 function Test-HardSkip {
     param([string]$Path)
     foreach ($skip in $hardSkipPatterns) {
@@ -123,6 +158,14 @@ function Test-IsLegacy {
     return @{ isLegacy = $false; reason = "" }
 }
 
+function Test-IsEntryPoint {
+    param([string]$Path)
+    foreach ($pattern in $entryPointPatterns) {
+        if ($Path -match $pattern) { return $true }
+    }
+    return $false
+}
+
 function Get-FileCategory {
     param([string]$Path)
     
@@ -145,6 +188,102 @@ function Get-FileCategory {
     if ($Path -match "\.(png|jpg|jpeg|gif|svg|ico|webp)$") { return "image" }
     if ($Path -match "\.(woff|woff2|ttf|eot|otf)$") { return "font" }
     return "other"
+}
+
+function Get-ImportanceScore {
+    param(
+        [string]$Path,
+        [object]$ScriptRefs,
+        [array]$ImportedBy,
+        [array]$WorkflowRefs,
+        $LastModified,
+        [int]$RecentDays
+    )
+    
+    $score = 0
+    $reasons = @()
+    
+    # Entry point check
+    if (Test-IsEntryPoint $Path) {
+        $score += $SCORE_ENTRY_POINT
+        $reasons += "entry-point"
+    }
+    
+    # Referenced in package.json scripts
+    $scriptNames = @()
+    if ($null -ne $ScriptRefs) {
+        if ($ScriptRefs -is [hashtable]) {
+            $scriptNames = @($ScriptRefs.Keys)
+        } elseif ($ScriptRefs.PSObject -and $ScriptRefs.PSObject.Properties) {
+            $scriptNames = @($ScriptRefs.PSObject.Properties.Name)
+        }
+    }
+    # Pre-compute escaped patterns for performance
+    $escapedPath = [regex]::Escape($Path)
+    $basename = [System.IO.Path]::GetFileName($Path)
+    $escapedBasename = [regex]::Escape($basename)
+    
+    foreach ($scriptName in $scriptNames) {
+        $scriptCmd = if ($ScriptRefs -is [hashtable]) { $ScriptRefs[$scriptName] } else { $ScriptRefs.$scriptName }
+        if ($scriptCmd -and $scriptCmd -match $escapedPath) {
+            $score += $SCORE_SCRIPT_REF_FULL
+            $reasons += "script:$scriptName"
+            break
+        }
+        # Also check for file basename
+        if ($scriptCmd -and $scriptCmd -match $escapedBasename) {
+            $score += $SCORE_SCRIPT_REF_BASENAME
+            $reasons += "script-basename:$scriptName"
+        }
+    }
+    
+    # Imported by other files (deduplicated count of files that import this one)
+    $importCount = 0
+    if ($ImportedBy -and $ImportedBy.Count -gt 0) {
+        $importCount = @($ImportedBy | Where-Object { $_ -and $_.Trim() } | Select-Object -Unique).Count
+    }
+    if ($importCount -gt 0) {
+        $score += [math]::Min($importCount * $SCORE_IMPORT_PER_FILE, $SCORE_IMPORT_MAX)
+        $reasons += "imported:$importCount"
+    }
+    
+    # Referenced in CI/CD workflows (reuse escaped patterns from above)
+    if ($WorkflowRefs -and $WorkflowRefs.Count -gt 0) {
+        foreach ($wf in $WorkflowRefs) {
+            if ($wf -match $escapedPath -or $wf -match $escapedBasename) {
+                $score += $SCORE_WORKFLOW_REF
+                $reasons += "workflow"
+                break
+            }
+        }
+    }
+    
+    # Recently modified
+    if ($LastModified) {
+        $daysSinceModified = ((Get-Date) - $LastModified).Days
+        if ($daysSinceModified -le $RecentDays) {
+            $score += $SCORE_RECENT_MODIFIED
+            $reasons += "recent:${daysSinceModified}d"
+        }
+    }
+    
+    # Config files are important
+    if ($Path -match "\.(json|ya?ml|toml)$" -and $Path -notmatch "package-lock|yarn\.lock") {
+        $score += $SCORE_CONFIG_FILE
+        $reasons += "config"
+    }
+    
+    # API routes are important
+    if ($Path -match "pages/api/|app/.*/route\.|routes/|api/") {
+        $score += $SCORE_API_ROUTE
+        $reasons += "api-route"
+    }
+    
+    return @{
+        score = $score
+        reasons = $reasons
+        isActive = $score -ge $SCORE_ACTIVE_THRESHOLD
+    }
 }
 
 function Extract-Exports {
@@ -241,6 +380,38 @@ function Extract-Imports {
     return $imports
 }
 
+function Extract-ExternalUrls {
+    param([string]$Content, [string]$Path)
+    
+    $urls = @()
+    
+    # Match http/https URLs
+    $urlRegex = 'https?://[^\s\)\]\>\"''`]+'
+    $matches = [regex]::Matches($Content, $urlRegex)
+    
+    foreach ($m in $matches) {
+        $url = $m.Value -replace '[,;:]+$', ''  # Remove trailing punctuation
+        $url = $url -replace '\)$', ''  # Remove trailing parenthesis
+        
+        # Skip localhost and example domains
+        if ($url -match 'localhost|127\.0\.0\.1|example\.com|example\.org|placeholder') { continue }
+        
+        # Skip common false positives
+        if ($url -match '\$\{|\{\{|%s|%d') { continue }  # Template strings
+        
+        $urls += @{
+            url = $url
+            file = $Path
+            type = if ($url -match "github\.com") { "github" }
+                   elseif ($url -match "npmjs\.com|npm\.im") { "npm" }
+                   elseif ($url -match "docs\.|documentation") { "docs" }
+                   else { "external" }
+        }
+    }
+    
+    return $urls
+}
+
 function Extract-Routes {
     param([string]$Content, [string]$Path)
     
@@ -279,22 +450,41 @@ function Extract-Routes {
     return $routes
 }
 
+function Resolve-ImportToFile {
+    param([string]$ImportSource, [string]$ImporterFile, [array]$AllFiles)
+    
+    if ($ImportSource -notmatch "^\.") { return $null }  # Skip external packages
+    
+    $importerDir = Split-Path $ImporterFile -Parent
+    if ([string]::IsNullOrEmpty($importerDir)) { $importerDir = "." }
+    
+    $resolved = [System.IO.Path]::Combine($importerDir, $ImportSource)
+    $resolved = $resolved -replace "\\", "/" -replace "//+", "/" -replace "/\./", "/" -replace "^\./", ""
+    
+    $extensions = @("", ".js", ".ts", ".jsx", ".tsx", ".json", "/index.js", "/index.ts", "/index.jsx", "/index.tsx")
+    foreach ($ext in $extensions) {
+        $candidate = $resolved + $ext
+        if ($AllFiles -contains $candidate) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
 function Find-PotentiallyUnusedFiles {
-    param($AllFiles, $Imports, $SourceFiles)
+    param($AllFiles, $Imports, $SourceFiles, $Exports)
     
     $unused = @()
     $importedPaths = @()
     
-    # Normalize import paths to file paths
     foreach ($import in $Imports) {
         $source = $import.source
         if ($source -match "^\.") {
-            # Relative import - resolve from importing file's directory
             $importerDir = Split-Path $import.file -Parent
-            $resolved = Join-Path $importerDir $source
-            $resolved = $resolved -replace "\\", "/" -replace "/\./", "/" -replace "^./", ""
+            if ([string]::IsNullOrEmpty($importerDir)) { $importerDir = "." }
+            $resolved = [System.IO.Path]::Combine($importerDir, $source)
+            $resolved = $resolved -replace "\\", "/" -replace "//+", "/" -replace "/\./", "/" -replace "^\./", ""
             
-            # Try with extensions
             $extensions = @("", ".js", ".ts", ".jsx", ".tsx", ".json", "/index.js", "/index.ts")
             foreach ($ext in $extensions) {
                 $importedPaths += ($resolved + $ext)
@@ -302,20 +492,16 @@ function Find-PotentiallyUnusedFiles {
         }
     }
     
-    # Find source files that are never imported
     foreach ($file in $SourceFiles) {
         $path = $file.path
         $category = Get-FileCategory $path
         
-        # Skip non-importable files
         if ($category -notin @("javascript", "python", "go", "rust", "jvm", "component")) { continue }
         
-        # Skip entry points and config
         if ($path -match "(index|main|app|server)\.(js|ts|py)$") { continue }
         if ($path -match "\.config\.(js|ts|mjs)$") { continue }
-        if ($path -match "^(pages|app)/") { continue }  # Next.js routes
+        if ($path -match "^(pages|app)/") { continue }
         
-        # Check if imported
         $isImported = $false
         foreach ($importPath in $importedPaths) {
             if ($path -eq $importPath -or $path -match [regex]::Escape($importPath)) {
@@ -325,8 +511,7 @@ function Find-PotentiallyUnusedFiles {
         }
         
         if (-not $isImported) {
-            # Check if it exports anything (if no exports, might be unused)
-            $hasExports = ($results.exports | Where-Object { $_.file -eq $path }).Count -gt 0
+            $hasExports = ($Exports | Where-Object { $_.file -eq $path }).Count -gt 0
             
             $unused += @{
                 path = $path
@@ -341,14 +526,51 @@ function Find-PotentiallyUnusedFiles {
     return $unused
 }
 
+# Build import dependency map (which files import which)
+function Build-ImportMap {
+    param([array]$Imports, [array]$AllFilePaths)
+    
+    $importedBy = @{}
+    
+    foreach ($import in $Imports) {
+        $resolved = Resolve-ImportToFile -ImportSource $import.source -ImporterFile $import.file -AllFiles $AllFilePaths
+        if ($resolved) {
+            if (-not $importedBy[$resolved]) {
+                $importedBy[$resolved] = @()
+            }
+            $importedBy[$resolved] += $import.file
+        }
+    }
+    
+    return $importedBy
+}
+
 # Main execution
 $isLocalPath = ($Target -match "[/\\]") -and (Test-Path $Target -ErrorAction SilentlyContinue)
+
+# Collect npm scripts and workflow refs from RealityData if provided
+$npmScripts = @{}
+$workflowContents = @()
+
+if ($RealityData) {
+    if ($RealityData.scripts) {
+        $scriptsObj = $RealityData.scripts
+        if ($scriptsObj.npm) {
+            $npmScripts = $scriptsObj.npm
+        } elseif ($scriptsObj["npm"]) {
+            $npmScripts = $scriptsObj["npm"]
+        }
+    }
+}
+
+# First pass: collect all file paths and basic info
+$allFilePaths = @()
+$fileInfoMap = @{}
 
 if ($isLocalPath) {
     $results.type = "local"
     $results.source = $Target
     
-    # Get ALL files first
     $allFilesList = Get-ChildItem -Path $Target -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { 
             $relativePath = $_.FullName.Replace("$Target\", "").Replace("\", "/")
@@ -357,42 +579,20 @@ if ($isLocalPath) {
     
     foreach ($file in $allFilesList) {
         $relativePath = $file.FullName.Replace("$Target\", "").Replace("\", "/")
-        $category = Get-FileCategory $relativePath
-        $legacyCheck = Test-IsLegacy $relativePath
-        
-        $fileInfo = @{
-            path = $relativePath
+        $allFilePaths += $relativePath
+        $fileInfoMap[$relativePath] = @{
+            fullPath = $file.FullName
             size = $file.Length
-            category = $category
-            lastModified = $file.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+            lastModified = $file.LastWriteTime
         }
-        
-        $results.allFiles += $fileInfo
-        
-        if ($legacyCheck.isLegacy) {
-            $results.legacyFiles += @{
-                path = $relativePath
-                reason = $legacyCheck.reason
-                size = $file.Length
-            }
-        }
-        
-        # Fetch content for source files
-        if ((Test-IsSource $relativePath) -and $file.Length -lt $MaxFileSize -and -not $SkipContent) {
-            $content = Get-Content -Path $file.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-            if ($content) {
-                $results.sourceFiles += @{
-                    path = $relativePath
-                    content = $content
-                    lines = ($content -split "`n").Count
-                    size = $file.Length
-                    category = $category
-                }
-                
-                $results.exports += Extract-Exports -Content $content -Path $relativePath
-                $results.imports += Extract-Imports -Content $content -Path $relativePath
-                $results.routes += Extract-Routes -Content $content -Path $relativePath
-            }
+    }
+    
+    # Get workflow contents for reference checking
+    $workflowDir = Join-Path $Target ".github/workflows"
+    if (Test-Path $workflowDir) {
+        $wfFiles = Get-ChildItem $workflowDir -Filter "*.yml" -ErrorAction SilentlyContinue
+        foreach ($wf in $wfFiles) {
+            $workflowContents += Get-Content $wf.FullName -Raw -ErrorAction SilentlyContinue
         }
     }
 }
@@ -407,66 +607,183 @@ else {
         $treeJson = & 'C:/Program Files/GitHub CLI/gh.exe' api $apiPath 2>$null
         $tree = $treeJson | ConvertFrom-Json
         
-        # Process ALL files
         $filesToProcess = $tree.tree | Where-Object {
             $_.type -eq "blob" -and -not (Test-HardSkip $_.path)
         }
         
         foreach ($item in $filesToProcess) {
-            $category = Get-FileCategory $item.path
-            $legacyCheck = Test-IsLegacy $item.path
-            
-            $fileInfo = @{
-                path = $item.path
+            $allFilePaths += $item.path
+            $fileInfoMap[$item.path] = @{
                 size = $item.size
-                category = $category
+                sha = $item.sha
             }
-            
-            $results.allFiles += $fileInfo
-            
-            if ($legacyCheck.isLegacy) {
-                $results.legacyFiles += @{
-                    path = $item.path
-                    reason = $legacyCheck.reason
-                    size = $item.size
+        }
+        
+        # Get workflow contents
+        $wfFiles = $tree.tree | Where-Object { $_.path -match "^\.github/workflows/.*\.yml$" }
+        foreach ($wf in $wfFiles) {
+            try {
+                $wfJson = & 'C:/Program Files/GitHub CLI/gh.exe' api "repos/$Owner/$Target/contents/$($wf.path)?ref=$Branch" 2>$null
+                $wfData = $wfJson | ConvertFrom-Json
+                if ($wfData.encoding -eq "base64") {
+                    $workflowContents += [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($wfData.content))
                 }
-            }
-            
-            # Fetch content for source files
-            if ((Test-IsSource $item.path) -and $item.size -lt $MaxFileSize -and -not $SkipContent) {
-                try {
-                    $contentJson = & 'C:/Program Files/GitHub CLI/gh.exe' api "repos/$Owner/$Target/contents/$($item.path)?ref=$Branch" 2>$null
-                    $contentData = $contentJson | ConvertFrom-Json
-                    
-                    if ($contentData.encoding -eq "base64") {
-                        $content = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($contentData.content))
-                        
-                        $results.sourceFiles += @{
-                            path = $item.path
-                            content = $content
-                            lines = ($content -split "`n").Count
-                            size = $contentData.size
-                            category = $category
-                        }
-                        
-                        $results.exports += Extract-Exports -Content $content -Path $item.path
-                        $results.imports += Extract-Imports -Content $content -Path $item.path
-                        $results.routes += Extract-Routes -Content $content -Path $item.path
-                    }
-                }
-                catch {
-                    $results.errors += "Failed to fetch: $($item.path) - $_"
-                }
+            } catch {
+                [void]$results.errors.Add("[WorkflowFetch] $($wf.path): $($_.Exception.Message)")
             }
         }
     }
     catch {
-        $results.errors += "Failed to access repository: $_"
+        [void]$results.errors.Add("[RepoAccess] ${Owner}/${Target}: $($_.Exception.Message)")
     }
 }
 
+# Second pass: collect imports first (need this for importance scoring)
+$allImports = @()
+$tempSourceFiles = @()
+
+foreach ($path in $allFilePaths) {
+    if (-not (Test-IsSource $path)) { continue }
+    
+    $fileInfo = $fileInfoMap[$path]
+    if ($fileInfo.size -ge $MaxFileSize) { continue }
+    
+    $content = $null
+    
+    if ($isLocalPath) {
+        $content = Get-Content -Path $fileInfo.fullPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    }
+    else {
+        try {
+            $contentJson = & 'C:/Program Files/GitHub CLI/gh.exe' api "repos/$Owner/$Target/contents/${path}?ref=$Branch" 2>$null
+            $contentData = $contentJson | ConvertFrom-Json
+            if ($contentData.encoding -eq "base64") {
+                $content = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($contentData.content))
+            }
+        } catch {}
+    }
+    
+    if ($content) {
+        $imports = Extract-Imports -Content $content -Path $path
+        $allImports += $imports
+        
+        $tempSourceFiles += @{
+            path = $path
+            content = $content
+            size = $fileInfo.size
+            lastModified = $fileInfo.lastModified
+        }
+    }
+}
+
+# Build import dependency map
+$importedByMap = Build-ImportMap -Imports $allImports -AllFilePaths $allFilePaths
+
+# Third pass: score importance and decide what to include
+foreach ($src in $tempSourceFiles) {
+    $path = $src.path
+    $category = Get-FileCategory $path
+    $legacyCheck = Test-IsLegacy $path
+    
+    # Get files that import this one
+    $importedBy = if ($importedByMap[$path]) { $importedByMap[$path] } else { @() }
+    
+    $importance = Get-ImportanceScore `
+        -Path $path `
+        -ScriptRefs $npmScripts `
+        -ImportedBy $importedBy `
+        -WorkflowRefs $workflowContents `
+        -LastModified $src.lastModified `
+        -RecentDays $RecentDays
+    
+    $fileInfo = @{
+        path = $path
+        size = $src.size
+        category = $category
+        importance = $importance.score
+        importanceReasons = $importance.reasons
+        isActive = $importance.isActive
+    }
+    
+    if ($src.lastModified) {
+        $fileInfo.lastModified = $src.lastModified.ToString("yyyy-MM-dd HH:mm:ss")
+    }
+    
+    [void]$results.allFiles.Add($fileInfo)
+    
+    if ($legacyCheck.isLegacy) {
+        [void]$results.legacyFiles.Add(@{
+            path = $path
+            reason = $legacyCheck.reason
+            size = $src.size
+        })
+    }
+    
+    # Include full content for active files or in DeepMode
+    if ($importance.isActive -or $DeepMode) {
+        [void]$results.sourceFiles.Add(@{
+            path = $path
+            content = $src.content
+            lines = ($src.content -split "`n").Count
+            size = $src.size
+            category = $category
+            importance = $importance.score
+            importanceReasons = $importance.reasons
+        })
+        [void]$results.activeFiles.Add($path)
+        
+        foreach ($exp in (Extract-Exports -Content $src.content -Path $path)) {
+            [void]$results.exports.Add($exp)
+        }
+        foreach ($route in (Extract-Routes -Content $src.content -Path $path)) {
+            [void]$results.routes.Add($route)
+        }
+        foreach ($url in (Extract-ExternalUrls -Content $src.content -Path $path)) {
+            [void]$results.externalUrls.Add($url)
+        }
+    }
+    else {
+        # For inactive files, just store metadata
+        [void]$results.inactiveFiles.Add(@{
+            path = $path
+            size = $src.size
+            category = $category
+            importance = $importance.score
+            reason = "Low importance score (below threshold 30)"
+        })
+    }
+}
+
+# Add non-source files to allFiles
+foreach ($path in $allFilePaths) {
+    if ($results.allFiles | Where-Object { $_.path -eq $path }) { continue }
+    
+    $fileInfo = $fileInfoMap[$path]
+    $category = Get-FileCategory $path
+    $legacyCheck = Test-IsLegacy $path
+    
+    [void]$results.allFiles.Add(@{
+        path = $path
+        size = $fileInfo.size
+        category = $category
+        importance = 0
+        isActive = $false
+    })
+    
+    if ($legacyCheck.isLegacy) {
+        [void]$results.legacyFiles.Add(@{
+            path = $path
+            reason = $legacyCheck.reason
+            size = $fileInfo.size
+        })
+    }
+}
+
+# Store all imports for analysis
+$results.imports = $allImports
+
 # Find potentially unused files
-$results.potentiallyUnused = Find-PotentiallyUnusedFiles -AllFiles $results.allFiles -Imports $results.imports -SourceFiles $results.sourceFiles
+$results.potentiallyUnused = Find-PotentiallyUnusedFiles -AllFiles $results.allFiles -Imports $results.imports -SourceFiles $results.sourceFiles -Exports $results.exports
 
 # Summary
 $totalLines = 0
@@ -475,13 +792,17 @@ foreach ($f in $results.sourceFiles) { if ($f.lines) { $totalLines += $f.lines }
 $results.summary = @{
     totalFilesInRepo = $results.allFiles.Count
     totalSourceFiles = $results.sourceFiles.Count
+    activeFileCount = $results.activeFiles.Count
+    inactiveFileCount = $results.inactiveFiles.Count
     totalLines = $totalLines
     totalExports = $results.exports.Count
     totalImports = $results.imports.Count
     totalRoutes = $results.routes.Count
+    totalExternalUrls = $results.externalUrls.Count
     legacyFileCount = $results.legacyFiles.Count
     potentiallyUnusedCount = $results.potentiallyUnused.Count
     errorCount = $results.errors.Count
+    mode = if ($DeepMode) { "deep" } else { "smart" }
     categorySummary = $results.allFiles | Group-Object -Property category | ForEach-Object {
         @{ category = $_.Name; count = $_.Count }
     }

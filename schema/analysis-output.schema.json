@@ -1,0 +1,215 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Tenormusica2024/doc-freshness-analyzer/schema/analysis-output.json",
+  "title": "Doc Freshness Analysis Output",
+  "description": "Standard output format for doc-freshness-analyzer",
+  "type": "object",
+  "required": ["metadata", "summary", "claims", "issues"],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "required": ["target", "timestamp", "claimsExtracted", "claimsVerified"],
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Repository or path analyzed"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Analysis timestamp (ISO 8601)"
+        },
+        "collectionDuration": {
+          "type": "string",
+          "description": "Time spent collecting data"
+        },
+        "claimsExtracted": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total claims extracted from docs"
+        },
+        "claimsVerified": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total claims verified"
+        },
+        "coveragePercent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Verification coverage percentage"
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["totalIssues", "critical", "warning", "info"],
+      "properties": {
+        "freshnessScore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Overall freshness score (0=stale, 100=fresh)"
+        },
+        "totalIssues": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "critical": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "warning": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "info": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "assessment": {
+          "type": "string",
+          "description": "Brief 1-2 sentence summary"
+        }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "text", "location", "result"],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["FILE_PATH", "COMMAND", "DEPENDENCY", "FUNCTION", "CONFIG", "API", "VERSION", "ENV_VAR", "URL", "EXTERNAL_LINK"]
+          },
+          "text": {
+            "type": "string",
+            "description": "Exact claim text from documentation"
+          },
+          "location": {
+            "type": "string",
+            "pattern": "^.+:\\d+$",
+            "description": "File:line format"
+          },
+          "result": {
+            "type": "string",
+            "enum": ["VERIFIED", "MISMATCH", "NOT_FOUND", "UNVERIFIABLE"]
+          },
+          "evidence": {
+            "type": "string",
+            "description": "File:line where verified, or explanation"
+          }
+        }
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "severity", "category", "location", "documentSays", "realityIs"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^ISSUE-\\d+$"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "warning", "info"]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "FILE_NOT_FOUND",
+              "FILE_MOVED",
+              "EXTENSION_MISMATCH",
+              "CASE_MISMATCH",
+              "COMMAND_INVALID",
+              "SCRIPT_MISSING",
+              "PACKAGE_MANAGER_WRONG",
+              "DEPENDENCY_MISSING",
+              "DEPENDENCY_UNUSED",
+              "VERSION_MISMATCH",
+              "ENV_VAR_MISSING",
+              "ENV_VAR_RENAMED",
+              "FUNCTION_RENAMED",
+              "FUNCTION_SIGNATURE_CHANGED",
+              "IMPORT_PATH_WRONG",
+              "EXPORT_MISSING",
+              "CONFIG_MISMATCH",
+              "CONTRADICTION",
+              "INCOMPLETE",
+              "UNVERIFIABLE",
+              "DEAD_LINK"
+            ]
+          },
+          "location": {
+            "type": "object",
+            "required": ["file", "line"],
+            "properties": {
+              "file": { "type": "string" },
+              "line": { "type": "integer" },
+              "content": { "type": "string" }
+            }
+          },
+          "documentSays": {
+            "type": "string"
+          },
+          "realityIs": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["high", "medium", "low"]
+          },
+          "suggestedFix": {
+            "type": "string",
+            "description": "Copy-paste ready fix"
+          }
+        }
+      }
+    },
+    "potentialIssues": {
+      "type": "array",
+      "description": "Low confidence issues for manual review",
+      "items": {
+        "type": "object",
+        "required": ["id", "reason", "claim"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^POTENTIAL-\\d+$"
+          },
+          "reason": { "type": "string" },
+          "claim": { "type": "string" },
+          "recommendation": { "type": "string" }
+        }
+      }
+    },
+    "verified": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["claim", "location"],
+        "properties": {
+          "claim": { "type": "string" },
+          "location": { "type": "string" }
+        }
+      }
+    },
+    "missingDocs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["topic", "reason"],
+        "properties": {
+          "topic": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  }
+}
