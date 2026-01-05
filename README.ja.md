@@ -6,6 +6,41 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
+## インストール
+
+```powershell
+# リポジトリをクローン
+git clone https://github.com/Tenormusica2024/doc-freshness-analyzer
+cd doc-freshness-analyzer
+
+# オプション1: 直接使用（このディレクトリ内でスラッシュコマンドが有効）
+# Claude Codeをこのディレクトリで起動するだけ
+
+# オプション2: グローバルインストール（どこでもスラッシュコマンドが使える）
+./install.ps1
+
+# アンインストール
+./install.ps1 -Uninstall
+```
+
+## クイックスタート
+
+### スラッシュコマンド（推奨）
+
+```
+/doc-freshness owner/repo
+/doc-freshness owner/repo --deep
+/doc-freshness C:\Projects\my-app --incremental
+```
+
+### PowerShell直接実行
+
+```powershell
+./scripts/run-analysis.ps1 -Target owner/repo
+./scripts/run-analysis.ps1 -Target owner/repo -DeepMode
+./scripts/run-analysis.ps1 -Target owner/repo -Incremental
+```
+
 ## 概要
 
 GitHub リポジトリのドキュメントを検証し、以下を検出する:

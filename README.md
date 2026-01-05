@@ -30,7 +30,34 @@ This tool performs **deep verification** by:
 - **GitHub Actions Integration**: Automated PR checks
 - **Auto-fix PR Creation**: Generate fix PRs automatically
 
+## Installation
+
+```powershell
+# Clone the repository
+git clone https://github.com/Tenormusica2024/doc-freshness-analyzer
+cd doc-freshness-analyzer
+
+# Option 1: Use directly (slash command works in this directory)
+# Just start Claude Code in this directory
+
+# Option 2: Global install (slash command works everywhere)
+./install.ps1
+
+# To uninstall
+./install.ps1 -Uninstall
+```
+
 ## Quick Start
+
+### Using Slash Command (Recommended)
+
+```
+/doc-freshness owner/repo
+/doc-freshness owner/repo --deep
+/doc-freshness C:\Projects\my-app --incremental
+```
+
+### Using PowerShell Directly
 
 ```powershell
 # Analyze a GitHub repository
