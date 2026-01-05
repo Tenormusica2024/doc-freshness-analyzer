@@ -81,6 +81,28 @@
 
 ---
 
+### Priority 4: PLANNED (Future Enhancements)
+
+#### 4.1 Auto-Update Documentation (Planned)
+- [ ] ドキュメント変更の自動検出・提案
+- [ ] コード変更時に該当ドキュメントを自動更新
+- [ ] Dosu/Swimm風のリアルタイム同期機能
+- [ ] Git hooks連携（pre-commit, post-merge）
+
+**Expected Impact**: ドキュメントのdriftを未然に防止、メンテナンスコスト大幅削減
+
+#### 4.2 Multi-Platform Support
+- [ ] Node.js版（npm package）
+- [ ] Python版（pip package）
+- [ ] Docker image
+
+#### 4.3 AI-Powered Suggestions
+- [ ] 修正内容の自動生成（Claude API連携強化）
+- [ ] ドキュメント品質スコアの詳細分析
+- [ ] 類似パターン検出による一括修正提案
+
+---
+
 ## Not Planned
 
 - ~~VSCode拡張~~ - 工数対効果が低い
@@ -92,6 +114,7 @@
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.1.0 | 2026-01-06 | SmartMode実装（77%トークン削減）、コードレビュー修正、英語ドキュメント追加 |
 | 0.4.0 | 2026-01-05 | Incremental Analysis Mode, HTTP HEAD URL Verification |
 | 0.3.0 | 2026-01-05 | GitHub Actions CI/CD, JSON Schema, DEAD_LINK検証, 自動修正PR作成 |
 | 0.2.0 | 2026-01-05 | プロンプト設計改善、potentialIssues分離 |
