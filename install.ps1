@@ -80,11 +80,21 @@ if ($sourceDir -ne $InstallPath) {
             New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
         }
         
-        # Explicit file copy (P0: security - no wildcard ambiguity)
+        # Explicit file copy with error handling (P0: security, P2: robustness)
+        $copyErrors = 0
         Get-ChildItem $scriptsSource -File | ForEach-Object {
-            Copy-Item $_.FullName -Destination $scriptsDir -Force
+            try {
+                Copy-Item $_.FullName -Destination $scriptsDir -Force -ErrorAction Stop
+            } catch {
+                Write-Host "  Error copying $($_.Name): $_" -ForegroundColor Red
+                $copyErrors++
+            }
         }
-        Write-Host "  Copied scripts to: $scriptsDir" -ForegroundColor Green
+        if ($copyErrors -eq 0) {
+            Write-Host "  Copied scripts to: $scriptsDir" -ForegroundColor Green
+        } else {
+            Write-Host "  Copied scripts with $copyErrors error(s)" -ForegroundColor Yellow
+        }
     } else {
         Write-Host "  Error: Scripts directory not found at $scriptsSource" -ForegroundColor Red
         Write-Host "  Please ensure you're running from the repository root" -ForegroundColor Yellow
@@ -123,6 +133,7 @@ $checks = @(
     @{ Path = $commandDest; Name = "/doc-freshness command" }
 )
 
+$copyErrors = 0
 $allOk = $true
 foreach ($check in $checks) {
     if (Test-Path $check.Path) {

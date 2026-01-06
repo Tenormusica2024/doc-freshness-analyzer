@@ -58,8 +58,8 @@ if ([string]::IsNullOrWhiteSpace($rawArgs)) {
     return
 }
 
-# Sanitize: remove dangerous shell characters
-$sanitizedArgs = $rawArgs -replace '[;&|<>`$]', ''
+# Sanitize: remove dangerous shell characters (P2: extended pattern)
+$sanitizedArgs = $rawArgs -replace '[;&|<>`$(){}[\]]', ''
 $argArray = $sanitizedArgs -split '\s+' | Where-Object { $_ -ne '' }
 
 $target = $argArray[0]
